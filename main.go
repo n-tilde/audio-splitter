@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopxl/beep"
@@ -16,57 +18,86 @@ import (
 
 func main() {
 
+	// Parse and validate flags
 	fname := flag.String("f", "", "file path for audio file")
-	flag.Int("m", 5, "number of minutes for each segment")
+	mins := flag.Int("m", 5, "number of minutes for each segment")
 	flag.Parse()
 
 	if *fname == "" {
 		log.Fatal("no file path provided")
 	}
 
+	// Get file reference
 	f, err := os.Open(*fname)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Decode mp3 to get sample rate from format object
 	streamer, format, err := mp3.Decode(f)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer streamer.Close()
 
-	count := 1
+	iterations := int(math.Ceil(float64(streamer.Len()) / float64(format.SampleRate.N(time.Duration(*mins)*time.Minute))))
 
-	for streamer.Position() < streamer.Len() {
+	// Instance a wait group
+	var wg sync.WaitGroup
+	wg.Add(iterations)
 
-		/** Encode snippet to file */
-		snippeLen := format.SampleRate.N(time.Duration(1) * time.Hour)
-		clip := beep.Take(snippeLen, streamer)
-		oname := fmt.Sprintf("test_data/%s_%v.mp3", extractFilenameFromPath(*fname), count)
-		out1, err := os.Create(oname)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer out1.Close()
-		wav.Encode(out1, clip, format)
+	for i := 0; i < iterations; i++ {
 
-		/** Find position to rewind n seconds */
-		currPos := streamer.Position()
-		cross := format.SampleRate.N(time.Duration(3) * time.Second)
-		newPos := currPos - cross
-		if newPos < 0 {
-			newPos = 0
+		duration := format.SampleRate.N(time.Duration(*mins) * time.Minute)
+		startPos := duration*i - format.SampleRate.N(time.Duration(3)*time.Second)
+		if startPos < 0 {
+			startPos = 0
 		}
 
-		/** Set the streamer to the rewound position */
-		err = streamer.Seek(newPos)
-		if err != nil {
-			log.Fatal(err)
-		}
+		go func(c int, s int, d int) {
+			defer wg.Done()
 
-		count++
+			// Get file reference
+			f, err := os.Open(*fname)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Printf("Started processing snipped %v from %v to %v\n", c, s, d)
+
+			/** Create a streamer from file reference */
+			streamer, _, err := mp3.Decode(f)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer streamer.Close()
+
+			/** Set start position of streamer */
+			err = streamer.Seek(s)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			/** Encode snippet to file */
+			snippeLen := format.SampleRate.N(time.Duration(*mins) * time.Minute)
+			clip := beep.Take(snippeLen, streamer)
+			base := fmt.Sprintf("%s/split/", extractBaseFromPath(*fname))
+			createDir(base)
+			oname := fmt.Sprintf("%s/%03d_%s.mp3", base, c, extractFilenameFromPath(*fname))
+
+			fmt.Printf("Encoding snipped %s\n", oname)
+
+			out1, err := os.Create(oname)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer out1.Close()
+			wav.Encode(out1, clip, format)
+
+		}(i+1, startPos, duration)
+
 	}
 
+	wg.Wait()
 }
 
 func extractFilenameFromPath(path string) string {
@@ -74,4 +105,20 @@ func extractFilenameFromPath(path string) string {
 	ext := filepath.Ext(base)
 	filename := strings.TrimSuffix(base, ext)
 	return filename
+}
+
+func extractBaseFromPath(path string) string {
+	return filepath.Dir(path)
+}
+
+func createDir(dirName string) {
+	_, err := os.Stat(dirName)
+	if os.IsNotExist(err) {
+		err := os.MkdirAll(dirName, 0755)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else if err != nil {
+		log.Fatal(err)
+	}
 }
