@@ -82,7 +82,7 @@ func main() {
 			clip := beep.Take(snippeLen, streamer)
 			base := fmt.Sprintf("%s/split/", extractBaseFromPath(*fname))
 			createDir(base)
-			oname := fmt.Sprintf("%s/%03d_%s.mp3", base, c, extractFilenameFromPath(*fname))
+			oname := fmt.Sprintf("%s/%03d_%s.wav", base, c, extractFilenameFromPath(*fname))
 
 			fmt.Printf("Encoding snipped %s\n", oname)
 
