@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"errors"
 
 	"github.com/gopxl/beep"
+	"github.com/gopxl/beep/effects"
 	"github.com/gopxl/beep/mp3"
 	"github.com/gopxl/beep/wav"
 )
@@ -28,27 +30,61 @@ func main() {
 	// Parse and validate flags
 	fname := flag.String("f", "", "file path for audio file")
 	mins := flag.Int("m", 5, "number of minutes for each segment")
+	vol := flag.Float64("vol", 0, "number of decibels to attenuate")
 	dirname := flag.String("dir", "", "dir path for audio files")
+	outname := flag.String("o", "", "output path for file")
 
 	flag.CommandLine.Parse(os.Args[2:])
 
-	fmt.Printf("Received %s\nwith command %s\n", *fname, os.Args[1])
-
-	if *fname == "" {
-		log.Fatal("no file path provided")
-	}
+	// fmt.Printf("Received %s and %d\nwith command %s\n", *fname, *vol, os.Args[1])
 
 
-	if (command == "split") {
+	if command == "split" {
 		split(*fname, *mins)
-	} else if ( command == "collate") {
-		collate(*dirname)
+	} else if  command == "collate" {
+		collate(*dirname, *outname)
+	} else if command == "mix" {
+		mix(*fname, *outname, *vol)
 	}
 
 }
 
-func collate(dirname string) error {
+func mix(fname, outname string, vol float64) {
 
+
+	// Get file reference
+	f, err := os.Open(fname)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Decode mp3 to get sample rate from format object
+	streamer, format, err := mp3.Decode(f)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
+	volStreamer := &effects.Volume{
+		Streamer: streamer,
+		Volume: float64(vol),
+		Base: 2,
+	}
+
+	out1, err := os.Create(outname)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer out1.Close()
+	wav.Encode(out1, volStreamer, format)
+
+}
+
+func collate(dirname string, outname string) error {
+
+	if dirname == "" || outname == "" {
+		return errors.New("provide dirname and outpath")
+	}
 
 	var ffmt beep.Format
 	var streams []beep.Streamer
@@ -74,13 +110,6 @@ func collate(dirname string) error {
 			streams = append(streams, streamer)
 		}
 
-
-		buffer := beep.NewBuffer(ffmt)
-
-		for let i = 0; i < len(streams); i++ {
-			buffer.Append(streams[i])
-		}
-
 		return 	nil
 	})
 
@@ -88,10 +117,29 @@ func collate(dirname string) error {
 		return err
 	}
 
+	buffer := beep.NewBuffer(ffmt)
+
+	for i := 0; i < len(streams); i++ {
+		buffer.Append(streams[i])
+	}
+
+	out1, err := os.Create(outname)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer out1.Close()
+	streamer := buffer.Streamer(0, buffer.Len())
+	wav.Encode(out1, streamer, ffmt)
+
+
 	return nil
 }
 
 func split(fname string,  mins int) {
+
+	if fname == "" {
+		log.Fatal("no file path provided")
+	}
 
 	// Get file reference
 	f, err := os.Open(fname)
