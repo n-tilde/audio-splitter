@@ -18,17 +18,83 @@ import (
 
 func main() {
 
+	if (len(os.Args) < 2) {
+		log.Fatal("no command issued")
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+
 	// Parse and validate flags
 	fname := flag.String("f", "", "file path for audio file")
 	mins := flag.Int("m", 5, "number of minutes for each segment")
-	flag.Parse()
+	dirname := flag.String("dir", "", "dir path for audio files")
+
+	flag.CommandLine.Parse(os.Args[2:])
+
+	fmt.Printf("Received %s\nwith command %s\n", *fname, os.Args[1])
 
 	if *fname == "" {
 		log.Fatal("no file path provided")
 	}
 
+
+	if (command == "split") {
+		split(*fname, *mins)
+	} else if ( command == "collate") {
+		collate(*dirname)
+	}
+
+}
+
+func collate(dirname string) error {
+
+
+	var ffmt beep.Format
+	var streams []beep.Streamer
+
+	err := filepath.Walk(dirname, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+
+			streamer, format, err := wav.Decode(f)
+			if err != nil {
+				return err
+			}
+
+			// add err clause if one of the formats is different
+			ffmt = format
+			streams = append(streams, streamer)
+		}
+
+
+		buffer := beep.NewBuffer(ffmt)
+
+		for let i = 0; i < len(streams); i++ {
+			buffer.Append(streams[i])
+		}
+
+		return 	nil
+	})
+
+	if (err != nil) {
+		return err
+	}
+
+	return nil
+}
+
+func split(fname string,  mins int) {
+
 	// Get file reference
-	f, err := os.Open(*fname)
+	f, err := os.Open(fname)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,7 +105,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	iterations := int(math.Ceil(float64(streamer.Len()) / float64(format.SampleRate.N(time.Duration(*mins)*time.Minute))))
+	iterations := int(math.Ceil(float64(streamer.Len()) / float64(format.SampleRate.N(time.Duration(mins)*time.Minute))))
 
 	// Instance a wait group
 	var wg sync.WaitGroup
@@ -47,7 +113,7 @@ func main() {
 
 	for i := 0; i < iterations; i++ {
 
-		duration := format.SampleRate.N(time.Duration(*mins) * time.Minute)
+		duration := format.SampleRate.N(time.Duration(mins) * time.Minute)
 		startPos := duration*i - format.SampleRate.N(time.Duration(3)*time.Second)
 		if startPos < 0 {
 			startPos = 0
@@ -57,7 +123,7 @@ func main() {
 			defer wg.Done()
 
 			// Get file reference
-			f, err := os.Open(*fname)
+			f, err := os.Open(fname)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -78,11 +144,11 @@ func main() {
 			}
 
 			/** Encode snippet to file */
-			snippeLen := format.SampleRate.N(time.Duration(*mins) * time.Minute)
+			snippeLen := format.SampleRate.N(time.Duration(mins) * time.Minute)
 			clip := beep.Take(snippeLen, streamer)
-			base := fmt.Sprintf("%s/split/", extractBaseFromPath(*fname))
+			base := fmt.Sprintf("%s/split/", extractBaseFromPath(fname))
 			createDir(base)
-			oname := fmt.Sprintf("%s/%03d_%s.wav", base, c, extractFilenameFromPath(*fname))
+			oname := fmt.Sprintf("%s/%03d_%s.wav", base, c, extractFilenameFromPath(fname))
 
 			fmt.Printf("Encoding snipped %s\n", oname)
 
